@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.linear_model import LogisticRegression
+from sklearn.dummy import DummyClassifier
 from sklearn.impute import SimpleImputer
 from sklearn.metrics import mean_absolute_error, roc_auc_score, brier_score_loss
 
@@ -45,6 +46,26 @@ def prep(df):
     return X, features, imp
 
 
+def fit_binary_model(model, X, y, label):
+    unique = pd.Series(y).dropna().unique()
+    if len(unique) < 2:
+        constant = int(unique[0]) if len(unique) else 0
+        print(f"[WARN] {label} has only one class in training; using constant classifier={constant}")
+        fallback = DummyClassifier(strategy="constant", constant=constant)
+        fallback.fit(X, y)
+        return fallback
+    model.fit(X, y)
+    return model
+
+
+def prob_of_one(model, X):
+    probs = model.predict_proba(X)
+    classes = list(getattr(model, "classes_", []))
+    if 1 in classes:
+        return probs[:, classes.index(1)]
+    return np.zeros(len(X), dtype=float)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--infile", default="data/featurized/data_featurized.csv")
@@ -75,12 +96,12 @@ def main():
     Xte = imp.transform(te[feats].apply(pd.to_numeric, errors="coerce"))
 
     reg.fit(Xtr, tr["target_finish"])
-    clf_top10.fit(Xtr, tr["target_top10"])
-    clf_dnf.fit(Xtr, tr["target_dnf"])
+    clf_top10 = fit_binary_model(clf_top10, Xtr, tr["target_top10"], "target_top10")
+    clf_dnf = fit_binary_model(clf_dnf, Xtr, tr["target_dnf"], "target_dnf")
 
     pred_finish = reg.predict(Xte)
-    prob_top10 = clf_top10.predict_proba(Xte)[:, 1]
-    prob_dnf = clf_dnf.predict_proba(Xte)[:, 1]
+    prob_top10 = prob_of_one(clf_top10, Xte)
+    prob_dnf = prob_of_one(clf_dnf, Xte)
     print(f"MAE={mean_absolute_error(te['target_finish'], pred_finish):.3f}")
     if len(np.unique(te["target_top10"])) > 1:
         print(f"AUC_top10={roc_auc_score(te['target_top10'], prob_top10):.3f} Brier={brier_score_loss(te['target_top10'], prob_top10):.3f}")
@@ -102,8 +123,8 @@ def main():
             return
         Xs = imp.transform(sub[feats].apply(pd.to_numeric, errors="coerce"))
         sub["pred_finish"] = reg.predict(Xs)
-        sub["prob_top10"] = clf_top10.predict_proba(Xs)[:, 1]
-        sub["prob_dnf"] = clf_dnf.predict_proba(Xs)[:, 1]
+        sub["prob_top10"] = prob_of_one(clf_top10, Xs)
+        sub["prob_dnf"] = prob_of_one(clf_dnf, Xs)
         sub["score"] = sub["prob_top10"] - sub["prob_dnf"]
         print("\nBest predicted finish")
         print(sub.sort_values("pred_finish")[["Driver", "pred_finish", "prob_top10", "prob_dnf"]].head(args.top).to_string(index=False))
