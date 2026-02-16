@@ -33,6 +33,13 @@ def choose_models():
 def prep(df):
     features = [c for c in df.columns if c.startswith("drv_") or c in ["Start", "qual_speed"]]
     X = df[features].apply(pd.to_numeric, errors="coerce")
+    all_missing = [c for c in X.columns if X[c].notna().sum() == 0]
+    if all_missing:
+        print(f"[WARN] dropping all-missing features before imputation: {', '.join(all_missing)}")
+        features = [c for c in features if c not in all_missing]
+        X = X[features]
+    if not features:
+        raise SystemExit("[ERROR] no usable feature columns after dropping all-missing features")
     imp = SimpleImputer(strategy="median")
     X = imp.fit_transform(X)
     return X, features, imp
